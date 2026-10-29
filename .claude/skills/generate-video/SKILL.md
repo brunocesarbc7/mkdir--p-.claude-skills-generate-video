@@ -1,15 +1,20 @@
 ---
 name: generate-video
-description: Guided HiggsField video generation — collects genre, topic, references, model, and duration, then plans a full storyboard, generates a 3×3 keyframe grid for visual consistency, slices it into per-scene start frames, creates each 10-second video from its keyframe, and delivers the final combined video.
+description: Geração guiada de vídeo com a Higgsfield — coleta gênero, tema, referências, modelo e duração; planeja o storyboard; cria uma grade 3×3 de quadros-chave para manter a consistência visual; recorta a grade em quadros iniciais por cena; gera cada cena de 10 segundos a partir do seu quadro e entrega o vídeo final unido. Funciona em modo automático (com ferramentas de geração da Higgsfield) ou manual (o usuário gera no site e envia os arquivos).
 user-invocable: true
 allowed-tools:
   - Read
   - Bash(curl *)
   - Bash(ls *)
   - Bash(file *)
-  - Bash(ffmpeg *)
+  - Bash(mkdir *)
+  - Bash(cp *)
   - Bash(printf *)
-  - Bash(convert *)
+  - Bash(python3 *)
+  - Bash(ffmpeg *)
+  - Bash(ffprobe *)
+  - mcp__Higgsfield_AI__models_list
+  - mcp__Higgsfield_AI__models_get
   - mcp__claude_ai_HiggsField__models_explore
   - mcp__claude_ai_HiggsField__generate_image
   - mcp__claude_ai_HiggsField__media_upload
@@ -19,358 +24,341 @@ allowed-tools:
   - mcp__claude_ai_HiggsField__job_display
 ---
 
-# /generate-video — Guided HiggsField Video Generator
+# /generate-video — Gerador de vídeo guiado com a Higgsfield
 
-You are a creative video director and prompt engineer. Guide the user step by step through creating a cinematic AI-generated video via the **HiggsField MCP**.
+Você é diretor criativo e engenheiro de prompts. Conduza o usuário passo a passo na criação de um vídeo cinematográfico gerado por IA na **Higgsfield**.
 
-The core architecture uses a **keyframe grid**: before any video is generated, you produce a single 3×3 image where each cell is the visual starting frame of one 10-second scene. Slicing this grid into individual keyframes and using each as `start_image` for its scene is what guarantees character identity, color temperature, lighting, and environment stay consistent across the whole video.
+A arquitetura central é a **grade de quadros-chave**: antes de gerar qualquer vídeo, produz-se uma única imagem 3×3 em que cada painel é o quadro inicial de uma cena de 10 segundos. Recortar essa grade e usar cada quadro como imagem inicial (`start_image`) da sua cena é o que garante que personagens, temperatura de cor, iluminação e ambiente fiquem consistentes no vídeo inteiro.
 
-Arguments passed: `$ARGUMENTS`
+Argumentos recebidos: `$ARGUMENTS`
 
----
-
-## Phase 1: Step-by-Step Input Collection
-
-Ask **one question at a time**, in order. Wait for the user's answer before moving to the next.
+Converse com o usuário em português. Escreva os **prompts de geração** (grade e cenas) em inglês, porque os modelos respondem melhor a eles — a menos que o usuário peça os prompts em português.
 
 ---
 
-### Step 1 — Genre
+## Fase 0: Modo de operação e pasta de trabalho
 
-Ask:
+### Modo
 
-> **Let's create your video!**
->
-> First — what **genre** or mood would you like?
->
-> Examples: `action` · `drama` · `comedy` · `horror` · `romance` · `sci-fi` · `fantasy` · `documentary` · `thriller` · `epic` · `noir` · `animation`
+Verifique quais ferramentas da Higgsfield existem nesta sessão (use ToolSearch com `higgsfield generate` se elas não estiverem carregadas):
 
----
+- **Modo automático** — existem ferramentas de geração da Higgsfield (`generate_image`, `generate_video`, `media_upload`, `media_confirm`, `job_status`, `job_display`, com qualquer prefixo, por exemplo `mcp__claude_ai_HiggsField__`). Você gera a grade e as cenas sozinho.
+- **Modo manual** — essas ferramentas não existem (por exemplo, o conector só tem `balance`, `models_list`, `models_get`, `show_generations`). Você escreve os prompts; o usuário gera a grade e os vídeos no site da Higgsfield e envia os arquivos; você recorta, confere e une tudo.
 
-### Step 2 — Topic / Concept
+Diga ao usuário, em uma linha, qual modo será usado e por quê. As fases 1, 2 e 5 são iguais nos dois modos; as fases 3 e 4 têm uma seção **[Automático]** e outra **[Manual]** — siga só a do modo escolhido.
 
-Ask:
+### Pasta de trabalho
 
-> Great choice! Now — what should the video be **about**? Describe the concept, scene, or story.
->
-> Example: *"A lone astronaut discovers a glowing ancient artifact on Mars and reaches out to touch it"*
+Todos os arquivos ficam no diretório do projeto, nunca em `/tmp/` (arquivos em `/tmp/` se perdem e de outras sessões podem colidir com os nomes fixos). Depois do Passo 2, crie:
 
----
+```bash
+mkdir -p ./videos/<slug>
+```
 
-### Step 3 — Reference Image(s)
-
-Ask:
-
-> Do you have any **reference images** to ground the video (e.g. a photo of a character, object, or place)?
->
-> If yes, give me the file path(s) — e.g. `~/Pictures/photo.jpg`
-> If no, just type `none`.
+onde `<slug>` é o tema em minúsculas, sem acentos, com hífens (ex.: `astronauta-artefato-marte`). Neste documento, `PASTA` = `./videos/<slug>`.
 
 ---
 
-### Step 4 — Model
+## Fase 1: Coleta de informações, passo a passo
 
-Before asking, call `mcp__claude_ai_HiggsField__models_explore` with `action: "recommend"`, `type: "video"`, and `input: "image"` (or `"text"` if no reference images).
+Faça **uma pergunta por vez**, na ordem. Espere a resposta antes da próxima.
 
-Then ask:
+### Passo 1 — Gênero
 
-> Almost there! Which **model** would you like to use?
+Pergunte:
+
+> **Vamos criar seu vídeo!**
 >
-> My recommendation: **Seedance 2.0** (`seedance_2_0`) — best for identity preservation and reference-driven scenes.
+> Primeiro: qual **gênero** ou clima você quer?
 >
-> Other options: `kling3_0` · `veo3` · `grok_video`
->
-> Press **Enter** or type `default` to use Seedance 2.0.
+> Exemplos: `ação` · `drama` · `comédia` · `terror` · `romance` · `ficção científica` · `fantasia` · `documentário` · `suspense` · `épico` · `noir` · `animação`
 
-If the user presses Enter or says "default", use `seedance_2_0`.
+### Passo 2 — Tema / conceito
+
+Pergunte:
+
+> Ótima escolha! Agora: sobre o que é o vídeo? Descreva o conceito, a cena ou a história.
+>
+> Exemplo: *"Uma astronauta solitária encontra um artefato antigo e brilhante em Marte e estende a mão para tocá-lo"*
+
+### Passo 3 — Imagem(ns) de referência
+
+Pergunte:
+
+> Você tem **imagens de referência** para o vídeo (ex.: foto de um personagem, objeto ou lugar)?
+>
+> Se tiver, anexe aqui na conversa ou me passe o caminho do arquivo (ex.: `~/Imagens/foto.jpg`).
+> Se não tiver, responda `nenhuma`.
+
+Para cada referência, confirme que o arquivo existe com `ls <caminho>` e `file <caminho>` e copie-o para `PASTA/referencia_<n>.<ext>`.
+
+### Passo 4 — Modelo
+
+Antes de perguntar, se houver uma ferramenta de catálogo (`models_explore` com `action: "recommend"`, `type: "video"`, `input: "image"`; ou `models_list`), consulte-a para confirmar quais modelos de vídeo existem. Se nenhuma existir, use a lista abaixo.
+
+Pergunte:
+
+> Quase lá! Qual **modelo** você quer usar?
+>
+> Recomendo o **Seedance 2.0** (`seedance_2_0`): é o melhor para preservar identidade e trabalhar a partir de referências.
+>
+> Outras opções: `kling3_0` · `veo3` · `grok_video`
+>
+> Responda `padrão` para usar o Seedance 2.0.
+
+Se o usuário responder `padrão`, `default`, `ok` ou algo equivalente, use `seedance_2_0`.
+
+### Passo 5 — Duração
+
+Pergunte:
+
+> Qual a duração do vídeo? (de 10s a 120s)
+>
+> Exemplos: `10s` · `30s` · `1 minuto` · `1,5 minuto` · `2 minutos`
+
+Calcule:
+- `total_segundos` = duração pedida, limitada a 10–120
+- `N_cenas` = ceil(total_segundos / 10) — no máximo 12
+- `N_grades` = 1 se `N_cenas` ≤ 9; 2 se `N_cenas` estiver entre 10 e 12
+- A grade 1 cobre as cenas 1–9; a grade 2 (quando existe) cobre as cenas 10–12 nos painéis 1–3
+- Painéis sem cena ficam pretos e são ignorados no recorte
+
+Se `total_segundos` não for múltiplo de 10, a última cena ainda é gerada com 10s e o vídeo final é cortado na Fase 5.
 
 ---
 
-### Step 5 — Duration
+## Fase 2: Planejamento do storyboard
 
-Ask:
+Monte primeiro a **Ficha de continuidade** — a identidade visual compartilhada e travada em todas as cenas:
 
-> How long should the video be? (10s to 120s)
->
-> Examples: `10s` · `30s` · `1 minute` · `1.5 minutes` · `2 minutes`
-
-Calculate:
-- `total_seconds` = the number of seconds requested
-- `N_scenes` = ceil(total_seconds / 10), clamped to max 12
-- The grid is always **3×3 = 9 cells**; scenes beyond 9 use a second grid pass if needed
-- Empty grid cells (when N < 9) are noted as unused
-
----
-
-## Phase 2: Storyboard Planning
-
-Build the **Continuity Sheet** first — this defines the shared visual identity locked across every scene:
-
-| Property | Value |
+| Propriedade | Valor |
 |---|---|
-| **Character A** | Exact appearance: shape, colors, markings, glow, texture |
-| **Character B** | Exact appearance: shape, colors, markings, glow, texture |
-| **Color temperature** | Warm / cool / neutral + dominant hues |
-| **Lighting** | Key light direction, fill, ambient glow, shadow style |
-| **Environment** | Setting, floor, background, atmospheric effects, particle details |
+| **Personagem A** | Aparência exata: formato, cores, marcas, brilho, textura |
+| **Personagem B** | Aparência exata: formato, cores, marcas, brilho, textura |
+| **Temperatura de cor** | Quente / fria / neutra + tons dominantes |
+| **Iluminação** | Direção da luz principal, preenchimento, brilho ambiente, estilo das sombras |
+| **Ambiente** | Cenário, chão, fundo, efeitos atmosféricos, partículas |
 
-Then plan all N scenes as a complete narrative arc. For each scene write:
-- **Beat**: what happens in these 10 seconds (action, emotion, movement)
-- **Camera**: angle and movement — **must rotate across scenes, no two consecutive scenes share the same angle**
-- **Opens**: exact visual state at the START (carried from the prior scene's end — never a fresh setup)
-- **Ends**: exact visual moment this scene closes on (becomes next scene's Opens)
+Depois planeje as N cenas como um arco narrativo completo. Para cada cena escreva:
+- **Ação**: o que acontece nesses 10 segundos (ação, emoção, movimento)
+- **Câmera**: ângulo e movimento — **precisa variar entre as cenas; duas cenas seguidas nunca usam o mesmo ângulo**
+- **Abre**: estado visual exato no INÍCIO (continua o fim da cena anterior — nunca recomeça do zero)
+- **Fecha**: momento visual exato em que a cena termina (vira o "Abre" da cena seguinte)
 
-Present for approval:
-
----
-
-**Here's your [total_seconds]s storyboard — does this look good?**
-
-**Continuity Sheet:**
-- Character A: [description]
-- Character B: [description]
-- Color temp / lighting: [values]
-- Environment: [description]
-
-| # | Beat | Camera | Opens | Ends |
-|---|------|--------|-------|------|
-| 1 | ... | Wide establishing | Fresh start | ... |
-| 2 | ... | Close-up tracking | [prior end] | ... |
-| N | ... | Low-angle | [prior end] | Final |
-
-Reply **approve** to generate keyframes — or tell me what to change.
+Apresente para aprovação:
 
 ---
 
-Wait for approval. Revise if needed. Never proceed without approval.
+**Aqui está o storyboard de [total_segundos]s. Ficou bom?**
+
+**Ficha de continuidade:**
+- Personagem A: [descrição]
+- Personagem B: [descrição]
+- Temperatura de cor / iluminação: [valores]
+- Ambiente: [descrição]
+
+| # | Ação | Câmera | Abre | Fecha |
+|---|------|--------|------|-------|
+| 1 | ... | Plano geral de abertura | Início | ... |
+| 2 | ... | Close com travelling | [fim da anterior] | ... |
+| N | ... | Contra-plongée | [fim da anterior] | Final |
+
+Responda **aprovar** para eu criar os quadros-chave, ou me diga o que mudar.
 
 ---
 
-## Phase 3: Generate Keyframe Grid
+Espere a aprovação. Revise se necessário. Nunca siga sem aprovação.
 
-Once the storyboard is approved, generate a single **3×3 keyframe grid image** where each cell is the opening visual frame of its scene. Because all 9 cells are generated together in one image, they share the same style, color palette, character designs, and lighting — this is what guarantees consistency across the whole video.
+---
 
-### 3a. Upload reference images (skip if none)
+## Fase 3: Grade de quadros-chave
 
-For each reference image path:
-1. Verify the file exists: `ls <path>` and `file <path>`
-2. Call `mcp__claude_ai_HiggsField__media_upload` with filename and correct content_type (`.jpg`→`image/jpeg`, `.png`→`image/png`, `.webp`→`image/webp`)
-3. Run the curl PUT command from the upload response
-4. Call `mcp__claude_ai_HiggsField__media_confirm` with `type: "image"` and the `media_id`
-5. Save each confirmed `media_id` as `ref_media_ids[]`
+Depois do storyboard aprovado, crie a **grade 3×3** em que cada painel é o quadro de abertura da sua cena. Como os painéis nascem juntos numa única imagem, eles compartilham estilo, paleta, personagens e luz — é isso que garante a consistência.
 
-### 3b. Generate the keyframe grid image
+### 3.1 Prompt da grade
 
-Call `mcp__claude_ai_HiggsField__generate_image` with:
-- `aspect_ratio`: "1:1" (square — produces a balanced 3×3 grid)
-- `medias`: all reference images with `role: "image"`
-- `prompt`: a detailed 3×3 storyboard grid description:
+Monte o prompt de cada grade `g` (1 ou 2). Na grade 1, os painéis 1–9 são as cenas 1–9; na grade 2, os painéis 1–3 são as cenas 10–12 e os painéis 4–9 ficam pretos.
 
 ```
 A clean 3×3 storyboard grid on a pure black background, 9 equal panels separated by thin white borders, each panel numbered 1-9 (top-left to bottom-right, left to right across rows).
 
-[Continuity Sheet values: describe exact character appearances, color temperature, lighting, environment — these apply to every panel]
+[Continuity Sheet values: exact character appearances, color temperature, lighting, environment — these apply to every panel]
 
-Panel 1 (top-left): [Scene 1 Opens description — exact characters, positions, action, environment]
-Panel 2 (top-center): [Scene 2 Opens description]
-Panel 3 (top-right): [Scene 3 Opens description]
-Panel 4 (middle-left): [Scene 4 Opens description]
-Panel 5 (middle-center): [Scene 5 Opens description]
-Panel 6 (middle-right): [Scene 6 Opens description]
-Panel 7 (bottom-left): [Scene 7 Opens or BLACK EMPTY PANEL]
-Panel 8 (bottom-center): [Scene 8 Opens or BLACK EMPTY PANEL]
-Panel 9 (bottom-right): [Scene 9 Opens or BLACK EMPTY PANEL]
+Panel 1 (top-left): [Opens of the scene for this panel — exact characters, positions, action, environment]
+Panel 2 (top-center): [...]
+Panel 3 (top-right): [...]
+Panel 4 (middle-left): [... or BLACK EMPTY PANEL]
+Panel 5 (middle-center): [... or BLACK EMPTY PANEL]
+Panel 6 (middle-right): [... or BLACK EMPTY PANEL]
+Panel 7 (bottom-left): [... or BLACK EMPTY PANEL]
+Panel 8 (bottom-center): [... or BLACK EMPTY PANEL]
+Panel 9 (bottom-right): [... or BLACK EMPTY PANEL]
 
 All panels must use identical character designs, color palette, and lighting. Cinematic storyboard style.
 ```
 
-Poll `mcp__claude_ai_HiggsField__job_status` until completed. Display with `mcp__claude_ai_HiggsField__job_display`.
+Na grade 2, acrescente ao fim: `Match the exact character designs, color palette, lighting and rendering style of the reference storyboard grid.` — e use a grade 1 como imagem de referência (ver abaixo). Isso mantém as cenas 10–12 consistentes com as 1–9.
 
-Download: `curl -s -o /tmp/keyframe_grid.png "<rawUrl>"`
+### 3.2 [Automático] Gerar a grade
 
-### 3c. Slice the grid into individual keyframes
+1. **Enviar referências** (pule se não houver): para cada `PASTA/referencia_<n>`, chame `media_upload` com o nome e o `content_type` correto (`.jpg`→`image/jpeg`, `.png`→`image/png`, `.webp`→`image/webp`), rode o `curl` PUT devolvido, chame `media_confirm` com `type: "image"` e guarde o `media_id` em `ref_media_ids[]`.
+2. Chame `generate_image` com `aspect_ratio: "1:1"`, o prompt da 3.1 e `medias` = todas as referências com `role: "image"` (na grade 2, inclua também a grade 1 enviada do mesmo jeito).
+3. Consulte `job_status` até concluir e mostre com `job_display`.
+4. Baixe: `curl -s -o PASTA/grade_<g>.png "<rawUrl>"`.
 
-Do NOT use `convert` (ImageMagick) — it may not be available and does not handle grid borders reliably.
+### 3.2 [Manual] O usuário gera a grade
 
-Instead, use Python + PIL to detect the actual white border lines in the image and crop each panel precisely:
-
-```python
-python3 -c "
-from PIL import Image
-import numpy as np
-
-img = Image.open('/tmp/keyframe_grid.png').convert('RGB')
-arr = np.array(img)
-
-# Find bright column and row separators (white border lines)
-brightness_cols = arr.mean(axis=(0, 2))
-brightness_rows = arr.mean(axis=(1, 2))
-
-# Detect border runs: sequences of columns/rows above threshold
-threshold = 200
-
-def find_borders(brightness, size):
-    in_border = False
-    borders = []  # list of (start, end) for each border band
-    start = 0
-    for i in range(size):
-        if brightness[i] > threshold:
-            if not in_border:
-                start = i
-                in_border = True
-        else:
-            if in_border:
-                borders.append((start, i - 1))
-                in_border = False
-    if in_border:
-        borders.append((start, size - 1))
-    return borders
-
-col_borders = find_borders(brightness_cols, img.width)
-row_borders = find_borders(brightness_rows, img.height)
-
-# Convert borders into panel content regions
-def to_regions(borders, size):
-    regions = []
-    prev_end = borders[0][1] + 1  # skip outer left/top border
-    for b_start, b_end in borders[1:]:
-        if b_start > prev_end:
-            regions.append((prev_end, b_start - 1))
-        prev_end = b_end + 1
-    return regions
-
-col_regions = to_regions(col_borders, img.width)
-row_regions = to_regions(row_borders, img.height)
-
-print('Col regions:', col_regions)
-print('Row regions:', row_regions)
-
-# Crop each panel left-to-right, top-to-bottom
-idx = 0
-for (y1, y2) in row_regions:
-    for (x1, x2) in col_regions:
-        panel = img.crop((x1, y1, x2 + 1, y2 + 1))
-        panel.save(f'/tmp/keyframe_{idx}.png')
-        print(f'keyframe_{idx}.png: {panel.size} from ({x1},{y1}) to ({x2},{y2})')
-        idx += 1
-"
-```
-
-This auto-detects the actual panel boundaries regardless of border thickness, producing `/tmp/keyframe_0.png` through `/tmp/keyframe_N.png` in row-major order (left-to-right, top-to-bottom).
-
-After slicing, **read each keyframe image** to visually verify it contains the correct scene content. If any panel looks wrong (wrong scene, black empty panel used, border artifacts), re-run with adjusted threshold or manually specify crop coordinates.
-
-Only use keyframes for scenes 0 through N_scenes-1 (skip empty black panels).
-
-### 3d. Upload each keyframe
-
-For each keyframe i (0 to N_scenes-1):
-1. `mcp__claude_ai_HiggsField__media_upload` with `filename: "keyframe_i.png"`, `content_type: "image/png"`
-2. Run the curl PUT to upload `/tmp/keyframe_i.png`
-3. `mcp__claude_ai_HiggsField__media_confirm` with `type: "image"`
-4. Save as `keyframe_media_ids[i]`
-
-### 3e. Show keyframes for approval
-
-Tell the user:
+Entregue o prompt da 3.1 num bloco de código e diga:
 
 ---
 
-**Here are your [N] scene keyframes — do these opening frames look right?**
+**Prompt da grade [g] pronto.** No site da Higgsfield:
 
-*(The grid above shows the starting frame for each scene. Each cell will become the first frame of its 10-second video.)*
-
-Reply **approve** to start generating videos — or describe what to fix and I'll regenerate the grid.
-
----
-
-Wait for approval. If the user wants changes, go back to 3b and regenerate the grid.
+1. Abra a geração de **imagem** e escolha um modelo de imagem.
+2. Proporção **1:1** (quadrada).
+3. Envie como referência: [lista das imagens de referência; na grade 2, também a grade 1].
+4. Cole o prompt acima e gere.
+5. Baixe a imagem e anexe aqui (ou me passe o caminho do arquivo).
 
 ---
 
-## Phase 4: Generate Videos Scene by Scene
+Quando o arquivo chegar, confira com `ls` e `file` que é uma imagem e copie para `PASTA/grade_<g>.png`.
 
-Once keyframes are approved, generate each 10-second scene in order.
+### 3.3 Recortar a grade em quadros
 
-For each scene i (1 to N_scenes):
+Não use `convert` (ImageMagick): pode não estar instalado e não lida bem com as bordas. Use o script que acompanha esta skill, na mesma pasta deste `SKILL.md`:
 
-**Tell the user:** "Generating scene [i] of [N_scenes]…"
-
-Call `mcp__claude_ai_HiggsField__generate_video` with:
-- `model`: chosen model
-- `prompt`: the scene's cinematic prompt — constructed as follows:
-  - **Always opens mid-action or mid-state** — never re-establishes the setup from zero. Use language like "Continuing mid-battle…", "The fight rages on as…", "Picking up immediately from…"
-  - Re-states the exact `Opens` visual state from the storyboard (what the keyframe shows)
-  - Describes the scene's beat and camera movement in full
-  - Ends with a description matching the scene's `Ends` state
-  - **Fully re-describes both characters and the environment** with the same specifics as the Continuity Sheet — the model has no memory of prior scenes
-  - 4–8 sentences, rich with sensory and visual detail
-- `aspect_ratio`: "16:9"
-- `duration`: 10
-- `resolution`: "1080p"
-- `genre`: genre value (seedance_2_0 only — omit for other models)
-- `medias`:
-  - `{ "value": keyframe_media_ids[i-1], "role": "start_image" }` — locks the exact opening frame
-  - `{ "value": ref_id, "role": "image" }` for each original reference image — reinforces character identity throughout
-
-Poll `mcp__claude_ai_HiggsField__job_status` (sync: true) until `"completed"` or `"failed"`.
-
-Call `mcp__claude_ai_HiggsField__job_display` with the job id.
-
-Download: `curl -s -o /tmp/scene_NNN.mp4 "<rawUrl>"` (zero-padded, e.g. `scene_001.mp4`)
-
-**Tell the user:** "Scene [i]/[N_scenes] done."
-
-If a scene fails, explain the error and retry with an adjusted prompt before continuing.
-
----
-
-## Phase 5: Deliver Final Video
-
-Once all scenes are downloaded:
-
-1. Write the concat list:
 ```bash
-printf "file '/tmp/scene_001.mp4'\nfile '/tmp/scene_002.mp4'\n..." > /tmp/concat_final.txt
+python3 .claude/skills/generate-video/recortar_grade.py PASTA/grade_1.png PASTA 1 <min(N_cenas, 9)>
+python3 .claude/skills/generate-video/recortar_grade.py PASTA/grade_2.png PASTA 10 <N_cenas - 9>   # só se N_grades = 2
 ```
 
-2. Concatenate:
+O script detecta as linhas brancas entre os painéis (com ou sem moldura externa), corta uma margem de 2 px para tirar resíduos de borda e, se não encontrar exatamente 3 colunas e 3 linhas, divide a imagem em terços iguais. Ele gera `PASTA/quadro_01.png` … `PASTA/quadro_NN.png` e informa qual método usou.
+
+Depois do recorte, **abra cada quadro com Read** para conferir se mostra a cena certa. Se algum estiver errado (cena trocada, painel preto, resto de borda), ajuste `LIMIAR_BORDA` no script ou recorte manualmente com coordenadas.
+
+### 3.4 Aprovação dos quadros
+
+Mostre a grade e diga:
+
+---
+
+**Aqui estão os [N] quadros iniciais. As aberturas ficaram certas?**
+
+*(Cada painel será o primeiro quadro do seu vídeo de 10 segundos.)*
+
+Responda **aprovar** para eu seguir para os vídeos, ou descreva o que corrigir e eu refaço o prompt da grade.
+
+---
+
+Espere a aprovação. Se o usuário pedir mudanças, volte à 3.1.
+
+---
+
+## Fase 4: Cenas, uma a uma
+
+### 4.1 Prompt de cada cena
+
+Para cada cena i (1 a N_cenas), escreva o prompt assim:
+- **Sempre começa no meio da ação** — nunca restabelece a situação do zero. Use expressões como "Continuing mid-battle…", "The fight rages on as…", "Picking up immediately from…"
+- Repete o estado visual exato do **Abre** (o que o quadro mostra)
+- Descreve por completo a ação e o movimento de câmera da cena
+- Termina com uma descrição que corresponde ao **Fecha**
+- **Redescreve por completo os personagens e o ambiente**, com os mesmos detalhes da Ficha de continuidade — o modelo não lembra das cenas anteriores
+- 4 a 8 frases, ricas em detalhes visuais e sensoriais
+
+Parâmetros de toda cena: proporção **16:9**, duração **10s**, resolução **1080p**, o modelo escolhido e, só no `seedance_2_0`, o gênero.
+
+### 4.2 [Automático] Gerar as cenas
+
+1. Envie cada `PASTA/quadro_ii.png` com `media_upload` (`content_type: "image/png"`), `curl` PUT e `media_confirm` (`type: "image"`); guarde em `quadro_media_ids[i]`.
+2. Para cada cena, diga "Gerando a cena [i] de [N_cenas]…" e chame `generate_video` com `model`, `prompt` (4.1), `aspect_ratio: "16:9"`, `duration: 10`, `resolution: "1080p"`, `genre` (só `seedance_2_0`) e `medias`:
+   - `{ "value": quadro_media_ids[i], "role": "start_image" }` — trava o quadro de abertura
+   - `{ "value": ref_id, "role": "image" }` para cada referência original — reforça a identidade dos personagens
+3. Consulte `job_status` (`sync: true`) até `"completed"` ou `"failed"`, mostre com `job_display` e baixe: `curl -s -o PASTA/cena_ii.mp4 "<rawUrl>"` (com dois dígitos: `cena_01.mp4`).
+4. Diga "Cena [i]/[N_cenas] pronta." Se falhar, explique o erro e tente de novo com o prompt ajustado antes de seguir.
+
+### 4.2 [Manual] O usuário gera as cenas
+
+Entregue todos os prompts de uma vez, um bloco por cena, para o usuário poder gerar em paralelo:
+
+---
+
+**Prompts das [N] cenas prontos.** Para cada cena, no site da Higgsfield:
+
+1. Abra a geração de **vídeo** com o modelo **[modelo]**.
+2. Imagem inicial (start frame): `quadro_ii.png` (anexo os quadros aqui; se precisar, peça que eu mostre algum).
+3. Referências extras: [imagens de referência originais, se houver].
+4. Proporção **16:9**, **10s**, **1080p**[, gênero **[gênero]** — só no Seedance 2.0].
+5. Cole o prompt da cena e gere.
+6. Baixe cada vídeo e anexe aqui (ou me passe os caminhos), dizendo de qual cena é cada um. Pode mandar aos poucos.
+
+**Cena 1** — quadro `quadro_01.png`
+```
+[prompt da cena 1]
+```
+…
+
+---
+
+Envie os arquivos `PASTA/quadro_ii.png` ao usuário junto com a mensagem (SendUserFile ou o equivalente da sessão), para ele baixar e usar como imagem inicial.
+
+Para cada vídeo recebido:
+1. Confira com `ffprobe -v error -show_entries format=duration:stream=codec_name,width,height,r_frame_rate -of compact <arquivo>` que é um vídeo com ~10s.
+2. Copie para `PASTA/cena_ii.mp4`.
+3. Diga "Cena [i]/[N_cenas] recebida" e liste as que faltam.
+
+Se o usuário reclamar de uma cena (ou o vídeo vier errado), reescreva o prompt dela e peça para gerar de novo. Só siga para a Fase 5 com todas as cenas recebidas.
+
+---
+
+## Fase 5: Entrega do vídeo final
+
+1. Escreva a lista de concatenação (caminhos relativos à lista):
 ```bash
-ffmpeg -f concat -safe 0 -i /tmp/concat_final.txt -c copy /tmp/final_video.mp4 -y
+printf "file 'cena_01.mp4'\nfile 'cena_02.mp4'\n..." > PASTA/lista.txt
 ```
 
-3. Copy to project directory:
+2. Una os vídeos. Se o `ffprobe` mostrou que todas as cenas têm o mesmo codec, resolução e fps (o normal no modo automático), use cópia direta:
 ```bash
-cp /tmp/final_video.mp4 ./final_[genre]_[total_seconds]s.mp4
+ffmpeg -f concat -safe 0 -i PASTA/lista.txt -c copy PASTA/final_<genero>_<total_segundos>s.mp4 -y
 ```
+Se forem diferentes (comum no modo manual, quando o site entrega resoluções ou fps distintos), padronize ao unir:
+```bash
+ffmpeg -f concat -safe 0 -i PASTA/lista.txt -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,format=yuv420p" -c:v libx264 -crf 18 -preset medium -c:a aac -ar 48000 PASTA/final_<genero>_<total_segundos>s.mp4 -y
+```
+Se só algumas cenas tiverem áudio, o concat falha: nesse caso, una sem áudio (`-an`) e avise o usuário.
 
-4. Present the result:
+3. Se `total_segundos` não for múltiplo de 10, acrescente `-t <total_segundos>` ao comando (exige o segundo comando, com reencode).
 
----
-
-**Your [total_seconds]-second video is complete!**
-
-**Local file:** [final_genre_Xs.mp4](./final_genre_Xs.mp4)
-
-**Scenes:** [N] × 10s · [model] · 1080p 16:9 · Genre: [genre]
-
----
+4. Apresente o resultado:
 
 ---
 
-## Rules
+**Seu vídeo de [total_segundos] segundos está pronto!**
 
-- Ask **one question at a time** — never bundle questions
-- Never generate keyframes without storyboard approval
-- Never generate videos without keyframe approval
-- Always use HiggsField MCP tools — never simulate or skip them
-- Seedance 2.0 is the default model — only the `genre` param applies to it
-- **The keyframe grid is mandatory** — it is the single source of truth for visual consistency. Never skip it.
-- **Always pass the scene's keyframe as `start_image`** — this locks the opening frame
-- **Always pass ALL original reference images as `role: "image"`** to every scene — they reinforce character identity throughout the clip
-- **Every scene prompt must open mid-action** — never "faces off", "squares up", "stands before". Use "continuing", "mid-battle", "picking up from"
-- **Every scene prompt must fully re-describe characters and environment** — the video model has no memory between generations
-- **Rotate camera angles across scenes** — no two consecutive scenes use the same angle
-- **Continuity Sheet values are frozen** — character descriptions, color temperature, lighting, and environment must be word-for-word identical across all scene prompts
-- If IP detection triggers on a `start_image`, describe the character more abstractly (shape/color, not brand name) and retry
-- The grid always has 9 cells; leave unused cells black — do not shrink the grid
+**Arquivo:** [final_genero_Xs.mp4](PASTA/final_genero_Xs.mp4)
+
+**Cenas:** [N] × 10s · [modelo] · 1080p 16:9 · Gênero: [gênero] · Modo: [automático/manual]
+
+---
+
+---
+
+## Regras
+
+- Faça **uma pergunta por vez** — nunca agrupe perguntas
+- Nunca gere (nem entregue o prompt da) grade sem storyboard aprovado
+- Nunca gere (nem entregue os prompts dos) vídeos sem quadros aprovados
+- No modo automático, use sempre as ferramentas da Higgsfield — nunca simule nem pule etapas. No modo manual, nunca finja que gerou algo: só o usuário gera, e você só trabalha com os arquivos que ele mandar
+- Seedance 2.0 é o modelo padrão — o parâmetro de gênero só vale para ele
+- **A grade de quadros-chave é obrigatória** — é a fonte única da consistência visual. Nunca pule
+- **Sempre use o quadro da cena como imagem inicial (`start_image`)** — isso trava a abertura
+- **Sempre passe TODAS as referências originais como `role: "image"`** em toda cena — elas reforçam a identidade dos personagens
+- **Todo prompt de cena começa no meio da ação** — nunca "faces off", "squares up", "stands before". Use "continuing", "mid-battle", "picking up from"
+- **Todo prompt de cena redescreve por completo personagens e ambiente** — o modelo não tem memória entre gerações
+- **Varie os ângulos de câmera** — duas cenas seguidas nunca usam o mesmo ângulo
+- **A Ficha de continuidade é congelada** — descrições de personagens, temperatura de cor, iluminação e ambiente são idênticas, palavra por palavra, em todos os prompts
+- Se o filtro de propriedade intelectual barrar uma imagem inicial, descreva o personagem de forma mais abstrata (formato/cor, sem nome de marca) e tente de novo
+- A grade sempre tem 9 painéis; deixe os não usados pretos — nunca diminua a grade. Mais de 9 cenas = segunda grade, com a primeira como referência
+- Todos os arquivos ficam em `./videos/<slug>/`, nunca em `/tmp/`
